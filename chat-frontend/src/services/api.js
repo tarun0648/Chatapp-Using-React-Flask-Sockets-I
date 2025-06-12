@@ -179,12 +179,15 @@ export const api = {
     }
   },
 
-  addGroupMember: async (groupId, userId, addedBy) => {
+  addGroupMember: async (groupId, userId) => {
     try {
       const response = await fetch(`${API_BASE}/group/${groupId}/add-member`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId, added_by: addedBy })
+        body: JSON.stringify({ 
+          user_id: userId, 
+          added_by: parseInt(localStorage.getItem('token')) 
+        })
       });
       
       const data = await response.json();
@@ -192,6 +195,18 @@ export const api = {
       return data;
     } catch (error) {
       console.error('API: Add member error:', error);
+      throw error;
+    }
+  },
+
+  searchUsersForGroup: async (groupId, searchTerm) => {
+    try {
+      const response = await fetch(`${API_BASE}/group/${groupId}/search-users?search=${encodeURIComponent(searchTerm)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Failed to search users');
+      return data;
+    } catch (error) {
+      console.error('API: Search users error:', error);
       throw error;
     }
   },

@@ -84,6 +84,7 @@ export default function AllRoutes() {
           </ProtectedRoute>
         } 
       />
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

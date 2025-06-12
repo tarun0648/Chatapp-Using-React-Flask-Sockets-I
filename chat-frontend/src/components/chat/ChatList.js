@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User, Settings, LogOut, Search, MessageCircle, Moon, Sun, Wifi, WifiOff, Users, Plus } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -8,6 +8,7 @@ import { initSocket } from '../../services/socket';
 
 const ChatList = () => {
   const [chats, setChats] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [showGroupModal, setShowGroupModal] = useState(false);
@@ -16,15 +17,102 @@ const ChatList = () => {
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
-  const loadChats = useCallback(async () => {
+  useEffect(() => {
+    loadChats();
+    setupSocket();
+  }, [user]);
+
+  const setupSocket = () => {
+    if (!user) return;
+    
+    const socket = initSocket();
+    socket.auth = { token: user.id };
+    
+    if (!socket.connected) {
+      socket.connect();
+    }
+    
+    socket.on('user_online', (data) => {
+      setOnlineUsers(prev => new Set([...prev, data.user_id]));
+      // Update chat list to reflect online status
+      setChats(prev => prev.map(chat => 
+        chat.user_id === data.user_id 
+          ? { ...chat, online: true }
+          : chat
+      ));
+    });
+    
+    socket.on('user_offline', (data) => {
+      setOnlineUsers(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(data.user_id);
+        return newSet;
+      });
+      // Update chat list to reflect offline status
+      setChats(prev => prev.map(chat => 
+        chat.user_id === data.user_id 
+          ? { ...chat, online: false }
+          : chat
+      ));
+    });
+
+    socket.on('new_message_notification', (data) => {
+      console.log('New message notification:', data);
+      // Update chat list with new message preview and unread count
+      setChats(prev => prev.map(chat => {
+        if (chat.id === data.chat_id) {
+          return {
+            ...chat,
+            last_message: data.content,
+            last_message_preview: data.content.length > 50 ? data.content.substring(0, 50) + '...' : data.content,
+            unread_count: (chat.unread_count || 0) + 1,
+            timestamp: 'now',
+            last_sender: data.sender_name
+          };
+        }
+        return chat;
+      }));
+    });
+
+    socket.on('receive_message', (data) => {
+      // Update chat list with new message preview and unread count
+      setChats(prev => prev.map(chat => {
+        const chatMatches = (chat.type === 'direct' && chat.id === data.chat_id) ||
+                           (chat.type === 'group' && chat.id === `group_${data.group_id}`);
+        
+        if (chatMatches && data.sender_id !== user.id) {
+          return {
+            ...chat,
+            last_message: data.content,
+            last_message_preview: data.content.length > 50 ? data.content.substring(0, 50) + '...' : data.content,
+            unread_count: (chat.unread_count || 0) + 1,
+            timestamp: 'now',
+            last_sender: data.sender_name
+          };
+        }
+        return chat;
+      }));
+    });
+
+    return () => {
+      socket.off('user_online');
+      socket.off('user_offline');
+      socket.off('new_message_notification');
+      socket.off('receive_message');
+    };
+  };
+
+  const loadChats = async () => {
     if (!user) return;
     
     try {
       const response = await api.getChats(user.id);
       if (response.success) {
-        setChats(response.data);
+        setChats(response.data.chats || response.data);
+        setCurrentUser(response.data.current_user || user);
+        
         const online = new Set(
-          response.data
+          (response.data.chats || response.data)
             .filter(chat => chat.type === 'direct' && chat.online)
             .map(chat => chat.user_id)
         );
@@ -35,41 +123,7 @@ const ChatList = () => {
     } finally {
       setLoading(false);
     }
-  }, [user]);
-
-  const setupSocket = useCallback(() => {
-    if (!user) return;
-    
-    const socket = initSocket();
-    socket.auth = { token: user.id };
-    socket.connect();
-    
-    socket.on('user_online', (data) => {
-      setOnlineUsers(prev => new Set([...prev, data.user_id]));
-    });
-    
-    socket.on('user_offline', (data) => {
-      setOnlineUsers(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(data.user_id);
-        return newSet;
-      });
-    });
-
-    socket.on('receive_message', () => {
-      loadChats();
-    });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, [user, loadChats]);
-
-  useEffect(() => {
-    loadChats();
-    const cleanup = setupSocket();
-    return cleanup;
-  }, [loadChats, setupSocket]);
+  };
 
   const filteredChats = chats.filter(chat => 
     chat.user.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -78,6 +132,10 @@ const ChatList = () => {
   );
 
   const openChat = (chat) => {
+    // Reset unread count when opening chat
+    setChats(prev => prev.map(c => 
+      c.id === chat.id ? { ...c, unread_count: 0 } : c
+    ));
     navigate(`/chat/${chat.id}`);
   };
 
@@ -99,9 +157,13 @@ const ChatList = () => {
 
   const getAvatar = (chat) => {
     if (chat.profile_picture) {
+      const imageSrc = chat.profile_picture.startsWith('http') 
+        ? chat.profile_picture 
+        : `http://localhost:5000${chat.profile_picture}`;
+      
       return (
         <img 
-          src={chat.profile_picture} 
+          src={imageSrc}
           alt={chat.user}
           className="w-12 h-12 rounded-full object-cover"
         />
@@ -117,6 +179,30 @@ const ChatList = () => {
             {chat.user.charAt(0).toUpperCase()}
           </span>
         )}
+      </div>
+    );
+  };
+
+  const getUserAvatar = () => {
+    if (currentUser?.profile_picture) {
+      const imageSrc = currentUser.profile_picture.startsWith('http') 
+        ? currentUser.profile_picture 
+        : `http://localhost:5000${currentUser.profile_picture}`;
+      
+      return (
+        <img 
+          src={imageSrc}
+          alt={currentUser.name}
+          className="w-10 h-10 rounded-full object-cover"
+        />
+      );
+    }
+    
+    return (
+      <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
+        <span className="text-white text-lg font-semibold">
+          {(currentUser?.name || user?.name || 'U').charAt(0).toUpperCase()}
+        </span>
       </div>
     );
   };
@@ -146,7 +232,6 @@ const ChatList = () => {
         }
       } catch (error) {
         console.error('Failed to create group:', error);
-        alert('Failed to create group. Please try again.');
       } finally {
         setCreating(false);
       }
@@ -172,7 +257,6 @@ const ChatList = () => {
                 placeholder="Enter group name"
                 required
                 disabled={creating}
-                maxLength={50}
               />
             </div>
 
@@ -187,7 +271,6 @@ const ChatList = () => {
                 placeholder="Enter group description"
                 rows={3}
                 disabled={creating}
-                maxLength={200}
               />
             </div>
 
@@ -196,23 +279,16 @@ const ChatList = () => {
                 type="button"
                 onClick={() => setShowGroupModal(false)}
                 disabled={creating}
-                className="flex-1 px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition disabled:opacity-50"
+                className="flex-1 px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={creating || !groupName.trim()}
-                className="flex-1 px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 px-4 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 transition disabled:opacity-50"
               >
-                {creating ? (
-                  <div className="flex items-center justify-center">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                    Creating...
-                  </div>
-                ) : (
-                  'Create Group'
-                )}
+                {creating ? 'Creating...' : 'Create Group'}
               </button>
             </div>
           </form>
@@ -238,12 +314,10 @@ const ChatList = () => {
       <div className="bg-white dark:bg-gray-800 shadow-sm border-b border-gray-200 dark:border-gray-700 px-6 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
-              <User className="text-white text-lg" />
-            </div>
+            {getUserAvatar()}
             <div>
               <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-100">Chats</h1>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Welcome back, {user?.name}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400">Welcome back, {currentUser?.name || user?.name}</p>
             </div>
           </div>
           <div className="flex items-center space-x-2">
@@ -257,21 +331,18 @@ const ChatList = () => {
             <button 
               onClick={toggleTheme}
               className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
-              title="Toggle Theme"
             >
               {isDark ? <Sun size={20} /> : <Moon size={20} />}
             </button>
             <button 
               onClick={() => navigate('/profile')}
               className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
-              title="Profile"
             >
               <Settings size={20} />
             </button>
             <button 
               onClick={logout}
               className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
-              title="Logout"
             >
               <LogOut size={20} />
             </button>
@@ -300,12 +371,6 @@ const ChatList = () => {
             <MessageCircle size={48} className="mb-4" />
             <p className="text-lg font-medium">No conversations yet</p>
             <p className="text-sm">Start a new chat or create a group</p>
-            <button
-              onClick={() => setShowGroupModal(true)}
-              className="mt-4 px-6 py-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg hover:from-blue-600 hover:to-purple-700 transition"
-            >
-              Create First Group
-            </button>
           </div>
         ) : (
           <div className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -316,7 +381,7 @@ const ChatList = () => {
                 className="px-6 py-4 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition"
               >
                 <div className="flex items-center space-x-3">
-                  <div className="relative flex-shrink-0">
+                  <div className="relative">
                     {getAvatar(chat)}
                     {chat.type === 'direct' && (
                       <div className={`absolute -bottom-1 -right-1 w-4 h-4 ${getStatusColor(chat)} rounded-full border-2 border-white dark:border-gray-800`}></div>
@@ -335,7 +400,7 @@ const ChatList = () => {
                       <div className="flex items-center space-x-2">
                         {chat.unread_count > 0 && (
                           <span className="bg-blue-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
-                            {chat.unread_count > 99 ? '99+' : chat.unread_count}
+                            {chat.unread_count}
                           </span>
                         )}
                         <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -343,14 +408,12 @@ const ChatList = () => {
                         </span>
                       </div>
                     </div>
-                    <div className="flex items-center justify-between mt-1">
+                    <div className="flex items-center justify-between">
                       <p className="text-sm text-gray-600 dark:text-gray-400 truncate">
-                        {chat.type === 'group' ? 
-                          (chat.description || 'Group conversation') : 
-                          `@${chat.username}`
-                        }
+                        {chat.last_message_preview || 
+                         (chat.type === 'group' ? chat.description || 'Group chat' : `@${chat.username}`)}
                       </p>
-                      <div className="flex items-center space-x-1 flex-shrink-0">
+                      <div className="flex items-center space-x-1">
                         {chat.type === 'direct' && (
                           <>
                             {onlineUsers.has(chat.user_id) || chat.online ? (

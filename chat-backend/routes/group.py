@@ -1,7 +1,8 @@
 from flask import Blueprint, request, jsonify
 from models.group import (
     create_group, get_user_groups, get_group_members, 
-    add_group_member, remove_group_member, get_group_by_id
+    add_group_member, remove_group_member, get_group_by_id,
+    search_users_for_group
 )
 from models.message import get_messages, mark_group_messages_as_read
 
@@ -91,6 +92,16 @@ def remove_member_from_group(group_id):
     except Exception as e:
         print(f"Remove member error: {e}")
         return jsonify({'success': False, 'message': 'Failed to remove member'}), 500
+
+@group_bp.route('/<group_id>/search-users', methods=['GET'])
+def search_users_for_group_addition(group_id):
+    try:
+        search_term = request.args.get('search', '')
+        users = search_users_for_group(int(group_id), search_term)
+        return jsonify({'success': True, 'data': users})
+    except Exception as e:
+        print(f"Search users error: {e}")
+        return jsonify({'success': False, 'message': 'Failed to search users'}), 500
 
 @group_bp.route('/<group_id>/mark-read', methods=['POST'])
 def mark_group_messages_read(group_id):

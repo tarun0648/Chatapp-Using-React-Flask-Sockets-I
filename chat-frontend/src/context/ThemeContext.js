@@ -18,6 +18,7 @@ export const ThemeProvider = ({ children }) => {
     if (savedTheme) {
       setIsDark(savedTheme === 'dark');
     } else {
+      // Check system preference
       setIsDark(window.matchMedia('(prefers-color-scheme: dark)').matches);
     }
   }, []);

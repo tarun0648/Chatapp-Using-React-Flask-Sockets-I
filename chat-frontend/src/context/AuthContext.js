@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
+import React, { createContext, useState, useContext, useEffect } from 'react';
 import { api } from '../services/api';
 
 const AuthContext = createContext();
@@ -16,7 +16,27 @@ export const AuthProvider = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const loadUserProfile = useCallback(async (token) => {
+  useEffect(() => {
+    checkAuthStatus();
+  }, []);
+
+  const checkAuthStatus = async () => {
+    const token = localStorage.getItem('token');
+    
+    if (token) {
+      try {
+        await loadUserProfile(token);
+      } catch (error) {
+        console.error('Failed to load profile:', error);
+        localStorage.removeItem('token');
+        setIsAuthenticated(false);
+        setUser(null);
+      }
+    }
+    setLoading(false);
+  };
+
+  const loadUserProfile = async (token) => {
     try {
       const response = await api.getProfile(token);
       if (response.success) {
@@ -32,27 +52,7 @@ export const AuthProvider = ({ children }) => {
       setUser(null);
       throw error;
     }
-  }, []);
-
-  const checkAuthStatus = useCallback(async () => {
-    const token = localStorage.getItem('token');
-    
-    if (token) {
-      try {
-        await loadUserProfile(token);
-      } catch (error) {
-        console.error('Failed to load profile:', error);
-        localStorage.removeItem('token');
-        setIsAuthenticated(false);
-        setUser(null);
-      }
-    }
-    setLoading(false);
-  }, [loadUserProfile]);
-
-  useEffect(() => {
-    checkAuthStatus();
-  }, [checkAuthStatus]);
+  };
 
   const login = async (credentials) => {
     try {
@@ -99,17 +99,6 @@ export const AuthProvider = ({ children }) => {
     logout,
     updateUser
   };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600 dark:text-gray-400">Loading...</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <AuthContext.Provider value={value}>

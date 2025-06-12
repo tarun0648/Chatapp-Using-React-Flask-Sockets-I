@@ -29,7 +29,22 @@ def get_chat_messages(chat_id):
 def send_message():
     try:
         data = request.json
-        message_id = save_message(data['sender_id'], data['receiver_id'], data['content'])
+        
+        if data.get('group_id'):
+            # Group message
+            message_id = save_message(
+                sender_id=data['sender_id'],
+                content=data['content'],
+                group_id=data['group_id']
+            )
+        else:
+            # Direct message
+            message_id = save_message(
+                sender_id=data['sender_id'],
+                receiver_id=data['receiver_id'],
+                content=data['content']
+            )
+            
         if message_id:
             return jsonify({'success': True, 'message': 'Message sent', 'message_id': message_id})
         else:

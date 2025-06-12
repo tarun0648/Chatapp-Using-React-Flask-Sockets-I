@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { ArrowLeft } from 'lucide-react';
 
@@ -28,3 +27,4 @@ const Header = ({ title, onBack, actions }) => {
 };
 
 export default Header;
+

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Moon, Sun, Edit2, Save, X, Camera } from 'lucide-react';
+import { ArrowLeft, User, Moon, Sun, Edit2, Save, X, Camera } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { api } from '../services/api';
@@ -29,6 +29,8 @@ const ProfilePage = () => {
         updateUser(profileData);
         setIsEditing(false);
         alert('Profile updated successfully!');
+      } else {
+        alert('Failed to update profile. Please try again.');
       }
     } catch (error) {
       console.error('Failed to update profile:', error);
@@ -56,6 +58,19 @@ const ProfilePage = () => {
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        alert('File size must be less than 5MB');
+        return;
+      }
+
+      // Validate file type
+      const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+      if (!allowedTypes.includes(file.type)) {
+        alert('Please select a valid image file (JPEG, PNG, or GIF)');
+        return;
+      }
+
       const reader = new FileReader();
       reader.onload = (e) => {
         setProfileData({
@@ -69,9 +84,15 @@ const ProfilePage = () => {
 
   const getProfileAvatar = () => {
     if (profileData.profile_picture) {
+      const imageSrc = profileData.profile_picture.startsWith('data:') 
+        ? profileData.profile_picture 
+        : profileData.profile_picture.startsWith('http')
+        ? profileData.profile_picture
+        : `http://localhost:5000${profileData.profile_picture}`;
+      
       return (
         <img 
-          src={profileData.profile_picture} 
+          src={imageSrc}
           alt={profileData.name}
           className="w-24 h-24 rounded-full object-cover"
         />
