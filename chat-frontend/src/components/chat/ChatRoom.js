@@ -1,3 +1,4 @@
+// frontend/src/components/chat/ChatRoom.js - COMPLETE FIX
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Phone, Video, MoreVertical, MessageCircle, Check, CheckCheck, Moon, Sun, Users, Info, UserPlus } from 'lucide-react';
@@ -17,6 +18,7 @@ const ChatRoom = () => {
   const [currentChat, setCurrentChat] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isTyping, setIsTyping] = useState(false);
+  const [typingUsers, setTypingUsers] = useState(new Set());
   const [onlineStatus, setOnlineStatus] = useState(false);
   const [groupMembers, setGroupMembers] = useState([]);
   const [showGroupInfo, setShowGroupInfo] = useState(false);
@@ -24,12 +26,38 @@ const ChatRoom = () => {
   const socketRef = useRef(null);
   const messagesEndRef = useRef(null);
   const processedMessageIds = useRef(new Set());
+  const roomJoinedRef = useRef(false);
+  const normalizedChatId = useRef(null);
 
   const isGroupChat = chatId.startsWith('group_');
   const groupId = isGroupChat ? chatId.split('_')[1] : null;
 
+  // Normalize chat ID for direct chats
+  const getNormalizedChatId = () => {
+    if (isGroupChat) {
+      return chatId;
+    }
+    
+    try {
+      const userIds = chatId.split('_').map(id => parseInt(id)).filter(id => !isNaN(id));
+      if (userIds.length === 2) {
+        userIds.sort();
+        return `${userIds[0]}_${userIds[1]}`;
+      }
+    } catch (error) {
+      console.error('Error normalizing chat ID:', error);
+    }
+    
+    return chatId;
+  };
+
   useEffect(() => {
     if (chatId && user) {
+      console.log(`🏠 Setting up chat room: ${chatId} for user: ${user.id}`);
+      
+      normalizedChatId.current = getNormalizedChatId();
+      console.log(`📝 Normalized chat ID: ${normalizedChatId.current}`);
+      
       loadMessages();
       setupSocket();
       
@@ -44,13 +72,20 @@ const ChatRoom = () => {
 
     return () => {
       if (socketRef.current) {
-        socketRef.current.emit('leave', { chat_id: chatId });
+        console.log('🧹 Cleaning up chat room...');
+        socketRef.current.emit('leave', { chat_id: normalizedChatId.current || chatId });
+        
+        // Remove all event listeners
         socketRef.current.off('receive_message');
         socketRef.current.off('message_delivered');
         socketRef.current.off('messages_read');
         socketRef.current.off('user_typing');
         socketRef.current.off('user_online');
         socketRef.current.off('user_offline');
+        socketRef.current.off('room_joined');
+        socketRef.current.off('error');
+        
+        roomJoinedRef.current = false;
       }
     };
   }, [chatId, user]);
@@ -84,7 +119,7 @@ const ChatRoom = () => {
         setCurrentChat({
           id: chatId,
           user: response.data.name,
-          user_id: userId,
+          user_id: parseInt(userId),
           online: response.data.is_online || false,
           profile_picture: response.data.profile_picture,
           type: 'direct'
@@ -96,7 +131,7 @@ const ChatRoom = () => {
       setCurrentChat({
         id: chatId,
         user: 'Chat Partner',
-        user_id: userId,
+        user_id: parseInt(userId),
         online: false,
         type: 'direct'
       });
@@ -107,49 +142,68 @@ const ChatRoom = () => {
     socketRef.current = initSocket();
     socketRef.current.auth = { token: user.id };
     
+    // Clear processed message IDs and reset room state
+    processedMessageIds.current.clear();
+    roomJoinedRef.current = false;
+    
+    // Ensure socket is connected
     if (!socketRef.current.connected) {
+      console.log('🔌 Connecting socket...');
       socketRef.current.connect();
+      
+      socketRef.current.on('connect', () => {
+        console.log('✅ Socket connected, joining room...');
+        joinRoom();
+      });
+    } else {
+      console.log('✅ Socket already connected, joining room...');
+      joinRoom();
     }
     
-    // Clear processed message IDs when joining a new chat
-    processedMessageIds.current.clear();
+    // Handle room join confirmation
+    socketRef.current.on('room_joined', (data) => {
+      console.log('🏠 Room joined successfully:', data);
+      roomJoinedRef.current = true;
+    });
     
-    socketRef.current.emit('join', { chat_id: chatId });
+    // Handle errors
+    socketRef.current.on('error', (error) => {
+      console.error('❌ Socket error:', error);
+    });
     
+    // Handle incoming messages - FIXED FOR REAL-TIME
     socketRef.current.on('receive_message', (data) => {
-      console.log('Received message:', data);
+      console.log('📨 REAL-TIME MESSAGE RECEIVED:', data);
       
-      // Prevent duplicate messages
+      // Prevent duplicates
       if (processedMessageIds.current.has(data.id)) {
-        console.log('Duplicate message detected, skipping:', data.id);
+        console.log('⚠️ Duplicate message, skipping:', data.id);
         return;
       }
       
       processedMessageIds.current.add(data.id);
       
       setMessages(prev => {
-        // Double check for duplicates in the state
         const exists = prev.find(msg => msg.id === data.id);
         if (exists) {
-          console.log('Message already exists in state:', data.id);
+          console.log('⚠️ Message already in state:', data.id);
           return prev;
         }
+        console.log('✅ Adding NEW message to state:', data.id);
         return [...prev, data];
       });
       
-      // Mark as read if not from current user
-      if (data.sender_id !== user.id) {
+      // Auto-mark as read if not from current user and we're in the room
+      if (data.sender_id !== user.id && roomJoinedRef.current) {
         setTimeout(() => {
-          if (isGroupChat) {
-            markGroupMessagesAsRead();
-          } else {
-            markMessagesAsRead(data.sender_id);
-          }
-        }, 100);
+          markAsRead();
+        }, 1000);
       }
     });
 
+    // Handle message delivery status
     socketRef.current.on('message_delivered', (data) => {
+      console.log('📋 Message delivered:', data);
       setMessages(prev => 
         prev.map(msg => 
           msg.id === data.message_id 
@@ -159,46 +213,111 @@ const ChatRoom = () => {
       );
     });
 
+    // Handle message read status - FIXED FOR BLUE TICK
     socketRef.current.on('messages_read', (data) => {
-      setMessages(prev => 
-        prev.map(msg => 
-          msg.sender_id === user.id 
-            ? { ...msg, status: 'read' }
-            : msg
-        )
-      );
-    });
-
-    socketRef.current.on('user_typing', (data) => {
-      if (data.user_id !== user.id) {
-        setIsTyping(data.is_typing);
-        if (data.is_typing) {
-          setTimeout(() => setIsTyping(false), 3000);
+      console.log('🔵 BLUE TICK EVENT RECEIVED:', data);
+      
+      if (isGroupChat) {
+        // Group chat logic
+        if (data.group_id) {
+          setMessages(prev => 
+            prev.map(msg => 
+              msg.sender_id === user.id 
+                ? { ...msg, status: 'read' }
+                : msg
+            )
+          );
+          console.log('🔵 Updated group message status to read');
+        }
+      } else {
+        // DIRECT CHAT BLUE TICK - CRITICAL FIX
+        console.log('🔵 Processing direct chat blue tick:', {
+          dataSenderId: data.sender_id,
+          currentUserId: user.id,
+          dataType: data.type
+        });
+        
+        // Only update if current user is the sender of the messages that were read
+        if (data.sender_id === user.id && (data.type === 'blue_tick' || data.type === 'messages_read')) {
+          console.log('🔵 Current user IS the sender - updating blue tick');
+          
+          setMessages(prev => 
+            prev.map(msg => {
+              if (msg.sender_id === user.id) {
+                console.log(`🔵 Updating message ${msg.id} to READ status`);
+                return { ...msg, status: 'read' };
+              }
+              return msg;
+            })
+          );
+          
+          console.log('🔵 ✅ BLUE TICK UPDATED SUCCESSFULLY');
+        } else {
+          console.log('🔵 ❌ Event not for current user or wrong type');
         }
       }
     });
 
-    socketRef.current.on('user_online', (data) => {
-      if (!isGroupChat) {
-        const userIds = chatId.split('_');
-        const otherUserId = parseInt(userIds.find(id => id !== user.id.toString()));
-        if (data.user_id === otherUserId) {
-          setOnlineStatus(true);
-          setCurrentChat(prev => prev ? { ...prev, online: true } : prev);
+    // Handle typing indicators - FIXED
+    socketRef.current.on('user_typing', (data) => {
+      console.log('⌨️ Typing event received:', data);
+      
+      // Only process if it's for this chat and not from current user
+      const currentChatId = normalizedChatId.current;
+      
+      if ((data.chat_id === currentChatId || data.chat_id === chatId) && data.user_id !== user.id) {
+        console.log('⌨️ Processing typing event for current chat');
+        
+        setIsTyping(data.is_typing);
+        
+        setTypingUsers(prev => {
+          const newSet = new Set(prev);
+          if (data.is_typing) {
+            newSet.add(data.user_id);
+          } else {
+            newSet.delete(data.user_id);
+          }
+          return newSet;
+        });
+        
+        // Auto-clear typing indicator after 4 seconds
+        if (data.is_typing) {
+          setTimeout(() => {
+            setIsTyping(false);
+            setTypingUsers(prev => {
+              const newSet = new Set(prev);
+              newSet.delete(data.user_id);
+              return newSet;
+            });
+          }, 4000);
         }
+      }
+    });
+
+    // Handle online status changes
+    socketRef.current.on('user_online', (data) => {
+      console.log('🟢 User online:', data);
+      if (!isGroupChat && currentChat?.user_id === data.user_id) {
+        setOnlineStatus(true);
+        setCurrentChat(prev => prev ? { ...prev, online: true } : prev);
       }
     });
 
     socketRef.current.on('user_offline', (data) => {
-      if (!isGroupChat) {
-        const userIds = chatId.split('_');
-        const otherUserId = parseInt(userIds.find(id => id !== user.id.toString()));
-        if (data.user_id === otherUserId) {
-          setOnlineStatus(false);
-          setCurrentChat(prev => prev ? { ...prev, online: false } : prev);
-        }
+      console.log('🔴 User offline:', data);
+      if (!isGroupChat && currentChat?.user_id === data.user_id) {
+        setOnlineStatus(false);
+        setCurrentChat(prev => prev ? { ...prev, online: false } : prev);
       }
     });
+  };
+
+  const joinRoom = () => {
+    if (socketRef.current && socketRef.current.connected && !roomJoinedRef.current) {
+      const roomId = normalizedChatId.current || chatId;
+      console.log(`🏠 Joining room: ${roomId}`);
+      socketRef.current.emit('join', { chat_id: roomId });
+    }
   };
 
   const loadMessages = async () => {
@@ -211,20 +330,18 @@ const ChatRoom = () => {
       }
       
       if (response.success) {
+        console.log(`📚 Loaded ${response.data.length} messages`);
         setMessages(response.data);
         
-        // Add message IDs to processed set
+        // Track processed messages
         response.data.forEach(msg => {
           processedMessageIds.current.add(msg.id);
         });
         
-        if (isGroupChat) {
-          markGroupMessagesAsRead();
-        } else {
-          const userIds = chatId.split('_');
-          const otherUserId = parseInt(userIds.find(id => id !== user.id.toString()));
-          markMessagesAsRead(otherUserId);
-        }
+        // Mark as read after loading
+        setTimeout(() => {
+          markAsRead();
+        }, 1000);
       }
     } catch (error) {
       console.error('Failed to load messages:', error);
@@ -233,23 +350,50 @@ const ChatRoom = () => {
     }
   };
 
-  const markMessagesAsRead = async (senderId) => {
+  const markAsRead = () => {
+    if (!roomJoinedRef.current) {
+      console.log('⚠️ Cannot mark as read: room not joined yet');
+      return;
+    }
+    
     try {
+      if (isGroupChat) {
+        markGroupMessagesAsRead();
+      } else {
+        const userIds = chatId.split('_');
+        const otherUserId = parseInt(userIds.find(id => id !== user.id.toString()));
+        markDirectMessagesAsRead(otherUserId);
+      }
+    } catch (error) {
+      console.error('Error marking messages as read:', error);
+    }
+  };
+
+  const markDirectMessagesAsRead = async (senderId) => {
+    try {
+      console.log(`🔵 MARK READ: Marking messages from ${senderId} as read by ${user.id}`);
+      
+      // Call API to mark messages as read
       await api.markMessagesAsRead({
         sender_id: senderId,
         receiver_id: user.id,
         reader_id: user.id
       });
 
-      if (socketRef.current) {
-        socketRef.current.emit('mark_read', {
+      // Send socket event for blue tick
+      if (socketRef.current && socketRef.current.connected) {
+        const markReadData = {
           sender_id: senderId,
           receiver_id: user.id,
-          reader_id: user.id
-        });
+          reader_id: user.id,
+          chat_id: normalizedChatId.current || chatId
+        };
+        
+        socketRef.current.emit('mark_read', markReadData);
+        console.log('🔵 MARK READ: Emitted mark_read event:', markReadData);
       }
     } catch (error) {
-      console.error('Failed to mark messages as read:', error);
+      console.error('❌ Failed to mark direct messages as read:', error);
     }
   };
 
@@ -257,7 +401,7 @@ const ChatRoom = () => {
     try {
       await api.markGroupMessagesAsRead(groupId, user.id);
       
-      if (socketRef.current) {
+      if (socketRef.current && socketRef.current.connected) {
         socketRef.current.emit('mark_read', {
           group_id: groupId,
           reader_id: user.id
@@ -269,7 +413,15 @@ const ChatRoom = () => {
   };
 
   const sendMessage = async (content) => {
-    if (!content.trim() || !user) return;
+    if (!content.trim() || !user || !socketRef.current || !socketRef.current.connected) {
+      console.log('⚠️ Cannot send message: requirements not met');
+      return;
+    }
+
+    if (!roomJoinedRef.current) {
+      console.log('⚠️ Cannot send message: room not joined yet');
+      return;
+    }
 
     let messageData;
     
@@ -278,7 +430,7 @@ const ChatRoom = () => {
         sender_id: user.id,
         content: content.trim(),
         group_id: parseInt(groupId),
-        chat_id: chatId
+        chat_id: normalizedChatId.current || chatId
       };
     } else {
       const chatParts = chatId.split('_');
@@ -288,26 +440,26 @@ const ChatRoom = () => {
         sender_id: user.id,
         receiver_id: parseInt(receiverId),
         content: content.trim(),
-        chat_id: chatId
+        chat_id: normalizedChatId.current || chatId
       };
     }
 
+    console.log('📤 SENDING MESSAGE:', messageData);
+    
     try {
-      // Don't wait for API response, let socket handle the message
-      if (socketRef.current) {
-        socketRef.current.emit('send_message', messageData);
-      }
+      socketRef.current.emit('send_message', messageData);
     } catch (error) {
-      console.error('Failed to send message:', error);
+      console.error('❌ Failed to send message:', error);
     }
   };
 
-  const handleTyping = (isTyping) => {
-    if (socketRef.current) {
+  const handleTyping = (isTypingNow) => {
+    console.log(`⌨️ Typing status: ${isTypingNow} for chat: ${chatId}`);
+    if (socketRef.current && socketRef.current.connected && roomJoinedRef.current) {
       socketRef.current.emit('typing', {
-        chat_id: chatId,
+        chat_id: normalizedChatId.current || chatId,
         user_id: user.id,
-        is_typing: isTyping
+        is_typing: isTypingNow
       });
     }
   };
@@ -377,6 +529,28 @@ const ChatRoom = () => {
           </span>
         </div>
       );
+    }
+  };
+
+  const getTypingIndicator = () => {
+    if (!isTyping && typingUsers.size === 0) return null;
+    
+    if (isGroupChat) {
+      const typingUsersList = Array.from(typingUsers);
+      const typingNames = typingUsersList.map(userId => {
+        const member = groupMembers.find(m => m.id === userId);
+        return member ? member.name.split(' ')[0] : 'Someone';
+      });
+      
+      if (typingNames.length === 1) {
+        return `${typingNames[0]} is typing...`;
+      } else if (typingNames.length === 2) {
+        return `${typingNames[0]} and ${typingNames[1]} are typing...`;
+      } else if (typingNames.length > 2) {
+        return `${typingNames[0]} and ${typingNames.length - 1} others are typing...`;
+      }
+    } else {
+      return isTyping ? 'Typing...' : null;
     }
   };
 
@@ -498,9 +672,9 @@ const ChatRoom = () => {
                 {currentChat?.user || 'Chat'}
               </h2>
               <p className="text-sm text-gray-600 dark:text-gray-400">
-                {isTyping ? 'Someone is typing...' : 
-                 isGroupChat ? `${currentChat?.member_count || 0} members` :
-                 (onlineStatus ? 'Online' : 'Offline')}
+                {getTypingIndicator() || 
+                 (isGroupChat ? `${currentChat?.member_count || 0} members` :
+                 (onlineStatus ? 'Online' : 'Offline'))}
               </p>
             </div>
           </div>
@@ -596,13 +770,18 @@ const ChatRoom = () => {
         )}
         
         {/* Typing indicator */}
-        {isTyping && (
+        {(isTyping || typingUsers.size > 0) && (
           <div className="flex justify-start">
             <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-4 py-2 rounded-2xl">
-              <div className="flex space-x-1">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+              <div className="flex items-center space-x-2">
+                <div className="flex space-x-1">
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                </div>
+                <span className="text-xs text-gray-500 dark:text-gray-400">
+                  {getTypingIndicator()}
+                </span>
               </div>
             </div>
           </div>

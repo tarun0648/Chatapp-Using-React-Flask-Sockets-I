@@ -1,3 +1,4 @@
+# backend/app.py - ENHANCED VERSION
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO
@@ -10,7 +11,13 @@ from sockets.chat_socket import socketio_init
 import os
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:3000"])
+
+# Enhanced CORS settings for Socket.IO
+CORS(app, 
+     origins=["http://localhost:3000"], 
+     allow_headers=["Content-Type", "Authorization"],
+     supports_credentials=True)
+
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-change-in-production')
 app.config['UPLOAD_FOLDER'] = os.getenv('UPLOAD_FOLDER', 'static/uploads')
 app.teardown_appcontext(close_db)
@@ -25,8 +32,20 @@ app.register_blueprint(user_bp, url_prefix="/user")
 app.register_blueprint(chat_bp, url_prefix="/chat")
 app.register_blueprint(group_bp, url_prefix="/group")
 
-# Initialize SocketIO
-socketio = SocketIO(app, cors_allowed_origins=["http://localhost:3000"], logger=True, engineio_logger=False)
+# Enhanced SocketIO configuration
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins=["http://localhost:3000"], 
+    logger=True, 
+    engineio_logger=False,
+    ping_timeout=60,
+    ping_interval=25,
+    transports=['websocket', 'polling'],
+    allow_upgrades=True,
+    async_mode='threading'
+)
+
+# Initialize socket handlers
 socketio_init(socketio)
 
 # Serve static files
@@ -38,15 +57,48 @@ def uploaded_file(filename):
 
 @app.route('/')
 def home():
-    return {"message": "Enhanced Chat Backend Running", "status": "OK"}
+    return {"message": "Enhanced Chat Backend Running", "status": "OK", "features": ["Real-time messaging", "Typing indicators", "Read receipts"]}
 
 @app.route('/health')
 def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "socket_connected": True}
+
+# Enhanced debugging middleware
+@app.before_request
+def log_request_info():
+    if request.path.startswith('/socket.io'):
+        print(f'Socket.IO request: {request.method} {request.path}')
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({'error': 'Not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    print("Starting Enhanced Flask-SocketIO server...")
-    print("Backend API: http://localhost:5000")
-    print("WebSocket: ws://localhost:5000")
-    print("Features: Group Chat, Profile Editing, Real-time messaging")
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    print("=" * 60)
+    print("🚀 Starting Enhanced Flask-SocketIO Chat Server")
+    print("=" * 60)
+    print("📱 Frontend URL: http://localhost:3000")
+    print("🔧 Backend API: http://localhost:5000")
+    print("🔌 WebSocket: ws://localhost:5000")
+    print("=" * 60)
+    print("✅ Features Enabled:")
+    print("   - Real-time messaging (Direct + Group)")
+    print("   - Live typing indicators")
+    print("   - Blue tick read receipts")
+    print("   - Online status tracking")
+    print("   - Enhanced error handling")
+    print("=" * 60)
+    
+    socketio.run(
+        app, 
+        debug=True, 
+        host='0.0.0.0', 
+        port=5000,
+        use_reloader=False,  # Important: prevents socket.io issues
+        log_output=True
+    )

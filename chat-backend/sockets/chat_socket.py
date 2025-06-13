@@ -1,3 +1,4 @@
+# backend/sockets/chat_socket.py - COMPLETE FIX
 from flask_socketio import emit, join_room, leave_room, disconnect
 from flask import request
 from models.message import save_message, mark_messages_as_read, get_message_by_id, mark_group_messages_as_read
@@ -19,7 +20,7 @@ def socketio_init(socketio):
     @socketio.on('connect')
     def handle_connect(auth):
         """Handle new socket connection"""
-        print(f'Client connected: {request.sid}')
+        print(f'🔌 Client connected: {request.sid}')
         try:
             token = auth.get('token') if auth else None
             if token:
@@ -35,21 +36,21 @@ def socketio_init(socketio):
                 # Update online status
                 update_user_online_status(user_id, True)
                 
-                # Join user to their personal room for direct messages
+                # Join user to their personal room for notifications
                 join_room(f"user_{user_id}")
                 
                 # Emit to all users that this user is online
-                emit('user_online', {'user_id': user_id}, broadcast=True)
+                socketio.emit('user_online', {'user_id': user_id}, broadcast=True)
                 
-                print(f'User {user_id} connected with socket {request.sid}')
+                print(f'✅ User {user_id} connected with socket {request.sid}')
                 
         except Exception as e:
-            print(f'Connect error: {e}')
+            print(f'❌ Connect error: {e}')
 
     @socketio.on('disconnect')
     def handle_disconnect():
         """Handle socket disconnection"""
-        print(f'Client disconnected: {request.sid}')
+        print(f'🔌 Client disconnected: {request.sid}')
         try:
             if request.sid in active_users:
                 user_id = active_users[request.sid]
@@ -66,16 +67,16 @@ def socketio_init(socketio):
                         # Update offline status
                         update_user_online_status(user_id, False)
                         # Emit to all users that this user is offline
-                        emit('user_offline', {'user_id': user_id}, broadcast=True)
+                        socketio.emit('user_offline', {'user_id': user_id}, broadcast=True)
                 
                 # Clean up user rooms
                 if user_id in user_rooms:
                     del user_rooms[user_id]
                 
-                print(f'User {user_id} disconnected')
+                print(f'❌ User {user_id} disconnected')
                 
         except Exception as e:
-            print(f'Disconnect error: {e}')
+            print(f'❌ Disconnect error: {e}')
 
     @socketio.on('join')
     def handle_join(data):
@@ -88,13 +89,37 @@ def socketio_init(socketio):
                 emit('error', {'message': 'User not authenticated'})
                 return
             
-            # Verify user can join this room
-            if chat_id.startswith('group_'):
+            print(f'🏠 User {user_id} joining room: {chat_id}')
+            
+            # Normalize direct chat IDs
+            if not chat_id.startswith('group_'):
+                try:
+                    user_ids = [int(x) for x in chat_id.split('_') if x.isdigit()]
+                    if len(user_ids) == 2:
+                        user_ids.sort()
+                        normalized_chat_id = f"{user_ids[0]}_{user_ids[1]}"
+                        
+                        # Verify user is part of the conversation
+                        if user_id not in user_ids:
+                            emit('error', {'message': 'Not authorized to join this chat'})
+                            return
+                        
+                        chat_id = normalized_chat_id
+                        print(f'📝 Normalized chat ID: {chat_id}')
+                    else:
+                        emit('error', {'message': 'Invalid direct chat ID'})
+                        return
+                except (ValueError, IndexError):
+                    emit('error', {'message': 'Invalid chat ID format'})
+                    return
+            else:
+                # Group chat verification
                 group_id = int(chat_id.split('_')[1])
                 if not is_user_group_member(group_id, user_id):
                     emit('error', {'message': 'Not authorized to join this group'})
                     return
             
+            # Join the room
             join_room(chat_id)
             
             # Track user rooms
@@ -103,14 +128,14 @@ def socketio_init(socketio):
             if chat_id not in user_rooms[user_id]:
                 user_rooms[user_id].append(chat_id)
             
-            print(f'User {user_id} joined room: {chat_id}')
+            print(f'✅ User {user_id} joined room: {chat_id}')
             
             # Emit join confirmation
             emit('room_joined', {'chat_id': chat_id, 'status': 'success'})
             
         except Exception as e:
-            print(f'Join error: {e}')
-            emit('error', {'message': 'Failed to join room'})
+            print(f'❌ Join error: {e}')
+            emit('error', {'message': f'Failed to join room: {str(e)}'})
 
     @socketio.on('leave')
     def handle_leave(data):
@@ -120,36 +145,46 @@ def socketio_init(socketio):
             user_id = active_users.get(request.sid)
             
             leave_room(chat_id)
-            
-            # Clean up typing status when leaving
             cleanup_typing_for_room(chat_id, user_id)
             
-            # Remove from user rooms tracking
             if user_id and user_id in user_rooms and chat_id in user_rooms[user_id]:
                 user_rooms[user_id].remove(chat_id)
             
-            print(f'User {user_id} left room: {chat_id}')
+            print(f'👋 User {user_id} left room: {chat_id}')
             
         except Exception as e:
-            print(f'Leave error: {e}')
+            print(f'❌ Leave error: {e}')
 
     @socketio.on('send_message')
     def handle_send_message(data):
-        """Handle sending a message"""
+        """Handle sending a message - FIXED FOR REAL-TIME"""
         try:
             user_id = active_users.get(request.sid)
             if not user_id:
                 emit('error', {'message': 'User not authenticated'})
                 return
             
-            # Validate message data
             if not data.get('content') or not data.get('content').strip():
                 emit('error', {'message': 'Message content cannot be empty'})
                 return
             
-            # Save message to database first
+            chat_id = data['chat_id']
+            print(f'💬 Sending message to chat: {chat_id}')
+            
+            # Normalize direct chat ID
+            if not chat_id.startswith('group_'):
+                try:
+                    user_ids = [int(x) for x in chat_id.split('_') if x.isdigit()]
+                    if len(user_ids) == 2:
+                        user_ids.sort()
+                        normalized_chat_id = f"{user_ids[0]}_{user_ids[1]}"
+                        chat_id = normalized_chat_id
+                        print(f'📝 Normalized message chat ID: {chat_id}')
+                except (ValueError, IndexError):
+                    pass
+            
+            # Save message to database
             if data.get('group_id'):
-                # Verify user is member of the group
                 if not is_user_group_member(data['group_id'], user_id):
                     emit('error', {'message': 'Not authorized to send to this group'})
                     return
@@ -166,122 +201,154 @@ def socketio_init(socketio):
                     content=data['content']
                 )
             
-            if message_id:
-                message_data = get_message_by_id(message_id)
-                if message_data:
-                    chat_id = data['chat_id']
-                    
-                    # Clean up typing status for sender
-                    cleanup_typing_for_room(chat_id, user_id)
-                    
-                    # Prepare message data for emission
-                    message_payload = {
-                        'id': message_data['id'],
-                        'sender_id': message_data['sender_id'],
-                        'receiver_id': message_data.get('receiver_id'),
-                        'group_id': message_data.get('group_id'),
-                        'content': message_data['content'],
-                        'status': 'sent',
-                        'sender_username': message_data.get('sender_username'),
-                        'sender_name': message_data.get('sender_name'),
-                        'sender_picture': message_data.get('sender_picture'),
-                        'timestamp': str(message_data.get('timestamp'))
-                    }
-                    
-                    # Emit to the chat room
-                    emit('receive_message', message_payload, room=chat_id)
-                    
-                    # For direct messages, also emit to both users' personal rooms
-                    if not data.get('group_id') and data.get('receiver_id'):
-                        receiver_id = data['receiver_id']
-                        sender_id = data['sender_id']
-                        
-                        # Emit to receiver's personal room (for notifications)
-                        emit('new_message_notification', {
-                            'chat_id': chat_id,
-                            'sender_name': message_data.get('sender_name'),
-                            'content': message_data['content'],
-                            'sender_picture': message_data.get('sender_picture'),
-                            'timestamp': str(message_data.get('timestamp'))
-                        }, room=f"user_{receiver_id}")
-                        
-                        # Emit to sender's personal room for chat list updates
-                        emit('new_message_notification', {
-                            'chat_id': chat_id,
-                            'sender_name': 'You',
-                            'content': message_data['content'],
-                            'timestamp': str(message_data.get('timestamp'))
-                        }, room=f"user_{sender_id}")
-                    
-                    # For group messages, emit to all group members
-                    elif data.get('group_id'):
-                        members = get_group_members(data['group_id'])
-                        for member in members:
-                            if member['id'] != data['sender_id']:  # Don't send to sender
-                                emit('new_message_notification', {
-                                    'chat_id': chat_id,
-                                    'sender_name': message_data.get('sender_name'),
-                                    'content': message_data['content'],
-                                    'sender_picture': message_data.get('sender_picture'),
-                                    'is_group': True,
-                                    'timestamp': str(message_data.get('timestamp'))
-                                }, room=f"user_{member['id']}")
-                    
-                    # Mark as delivered for sender
-                    emit('message_delivered', {
-                        'message_id': message_id,
-                        'chat_id': chat_id
-                    }, room=request.sid)
-                    
-            else:
+            if not message_id:
+                print(f'❌ Failed to save message to database')
                 emit('error', {'message': 'Failed to save message'})
+                return
+            
+            # Get the saved message data
+            message_data = get_message_by_id(message_id)
+            if not message_data:
+                print(f'❌ Failed to retrieve saved message')
+                emit('error', {'message': 'Failed to retrieve message'})
+                return
+            
+            print(f'✅ Message saved with ID: {message_id}')
+            
+            # Clean up typing
+            cleanup_typing_for_room(chat_id, user_id)
+            
+            # Prepare message payload
+            message_payload = {
+                'id': message_data['id'],
+                'sender_id': message_data['sender_id'],
+                'receiver_id': message_data.get('receiver_id'),
+                'group_id': message_data.get('group_id'),
+                'content': message_data['content'],
+                'status': 'delivered',
+                'sender_username': message_data.get('sender_username'),
+                'sender_name': message_data.get('sender_name'),
+                'sender_picture': message_data.get('sender_picture'),
+                'timestamp': str(message_data.get('timestamp'))
+            }
+            
+            print(f'📤 Broadcasting message to room: {chat_id}')
+            print(f'📤 Message payload: {message_payload}')
+            
+            # CRITICAL: Broadcast to room
+            socketio.emit('receive_message', message_payload, room=chat_id)
+            
+            # For direct chats, ALSO send to both user personal rooms
+            if not data.get('group_id') and data.get('receiver_id'):
+                receiver_id = data['receiver_id']
+                sender_id = data['sender_id']
+                
+                print(f'📤 DIRECT CHAT: Sending to user_{receiver_id} and user_{sender_id}')
+                
+                # Send to receiver's personal room
+                socketio.emit('receive_message', message_payload, room=f"user_{receiver_id}")
+                
+                # Send to sender's personal room
+                socketio.emit('receive_message', message_payload, room=f"user_{sender_id}")
+                
+                # Send to ALL active sockets of both users
+                for uid in [receiver_id, sender_id]:
+                    if uid in user_sockets:
+                        for socket_id in user_sockets[uid]:
+                            socketio.emit('receive_message', message_payload, room=socket_id)
+                            print(f'📤 Sent to socket {socket_id} for user {uid}')
+            
+            # Send delivery confirmation to sender
+            emit('message_delivered', {
+                'message_id': message_id,
+                'chat_id': chat_id
+            })
+            
+            print(f'✅ Message broadcast completed for chat: {chat_id}')
                     
         except Exception as e:
-            print(f'Error sending message: {e}')
-            emit('error', {'message': 'Failed to send message'})
+            print(f'❌ Error sending message: {e}')
+            import traceback
+            traceback.print_exc()
+            emit('error', {'message': f'Failed to send message: {str(e)}'})
 
     @socketio.on('mark_read')
     def handle_mark_read(data):
-        """Handle marking messages as read"""
+        """Handle marking messages as read - FIXED FOR BLUE TICK"""
         try:
             user_id = active_users.get(request.sid)
             if not user_id:
                 return
             
+            print(f'📖 Mark read request: {data}')
+            
             if data.get('group_id'):
-                # Verify user is member of the group
+                # Group message read
                 if not is_user_group_member(data['group_id'], user_id):
                     return
                 
                 affected_count = mark_group_messages_as_read(data['group_id'], data['reader_id'])
                 
-                # Notify all group members that messages were read
-                members = get_group_members(data['group_id'])
-                for member in members:
-                    if member['id'] != data['reader_id']:
-                        emit('messages_read', {
-                            'reader_id': data['reader_id'],
-                            'group_id': data['group_id'],
-                            'count': affected_count
-                        }, room=f"user_{member['id']}")
+                try:
+                    members = get_group_members(data['group_id'])
+                    for member in members:
+                        if member['id'] != data['reader_id']:
+                            socketio.emit('messages_read', {
+                                'reader_id': data['reader_id'],
+                                'group_id': data['group_id'],
+                                'count': affected_count
+                            }, room=f"user_{member['id']}")
+                except Exception as e:
+                    print(f'❌ Error notifying group read status: {e}')
             else:
+                # DIRECT MESSAGE READ - BLUE TICK FIX
                 sender_id = data['sender_id']
                 receiver_id = data['receiver_id']
                 reader_id = data['reader_id']
                 
+                print(f'🔵 BLUE TICK: Processing read for sender={sender_id}, reader={reader_id}')
+                
+                # Mark messages as read in database
                 affected_count = mark_messages_as_read(sender_id, receiver_id, reader_id)
+                print(f'🔵 BLUE TICK: {affected_count} messages marked as read in DB')
                 
                 if affected_count > 0:
-                    # Notify sender that messages were read
-                    emit('messages_read', {
+                    # Create blue tick notification
+                    blue_tick_data = {
+                        'type': 'blue_tick',
+                        'sender_id': sender_id,
                         'reader_id': reader_id,
-                        'count': affected_count
-                    }, room=f"user_{sender_id}")
+                        'receiver_id': receiver_id,
+                        'count': affected_count,
+                        'chat_id': data.get('chat_id')
+                    }
+                    
+                    print(f'🔵 BLUE TICK: Sending notification to sender {sender_id}')
+                    print(f'🔵 BLUE TICK: Notification data: {blue_tick_data}')
+                    
+                    # Send to sender's personal room
+                    socketio.emit('messages_read', blue_tick_data, room=f"user_{sender_id}")
+                    
+                    # Send to ALL active sockets of the sender
+                    if sender_id in user_sockets:
+                        for socket_id in user_sockets[sender_id]:
+                            socketio.emit('messages_read', blue_tick_data, room=socket_id)
+                            print(f'🔵 BLUE TICK: Sent to socket {socket_id}')
+                    
+                    # Also send to the chat room
+                    if data.get('chat_id'):
+                        socketio.emit('messages_read', blue_tick_data, room=data['chat_id'])
+                    
+                    print(f'🔵 ✅ BLUE TICK: Notifications sent successfully')
+                else:
+                    print(f'🔵 ❌ BLUE TICK: No messages were marked as read')
             
-            print(f'Marked {affected_count} messages as read')
+            print(f'📖 Mark read completed: {affected_count} messages')
                 
         except Exception as e:
-            print(f'Error marking messages as read: {e}')
+            print(f'❌ Error marking messages as read: {e}')
+            import traceback
+            traceback.print_exc()
 
     @socketio.on('typing')
     def handle_typing(data):
@@ -291,12 +358,25 @@ def socketio_init(socketio):
             user_id = data['user_id']
             is_typing = data['is_typing']
             
-            # Verify user is authenticated
+            print(f'⌨️ Typing event: user {user_id}, chat {chat_id}, typing: {is_typing}')
+            
             if user_id != active_users.get(request.sid):
                 return
             
-            # Verify user can send to this room
-            if chat_id.startswith('group_'):
+            # Normalize direct chat ID
+            if not chat_id.startswith('group_'):
+                try:
+                    user_ids = [int(x) for x in chat_id.split('_') if x.isdigit()]
+                    if len(user_ids) == 2:
+                        user_ids.sort()
+                        normalized_chat_id = f"{user_ids[0]}_{user_ids[1]}"
+                        chat_id = normalized_chat_id
+                        
+                        if user_id not in user_ids:
+                            return
+                except (ValueError, IndexError):
+                    return
+            else:
                 group_id = int(chat_id.split('_')[1])
                 if not is_user_group_member(group_id, user_id):
                     return
@@ -307,127 +387,49 @@ def socketio_init(socketio):
                 stop_typing(chat_id, user_id)
             
         except Exception as e:
-            print(f'Error handling typing: {e}')
+            print(f'❌ Error handling typing: {e}')
 
-    @socketio.on('get_online_users')
-    def handle_get_online_users():
-        """Get list of currently online users"""
-        try:
-            online_user_ids = list(user_sockets.keys())
-            emit('online_users_list', {'user_ids': online_user_ids})
-        except Exception as e:
-            print(f'Error getting online users: {e}')
-
-    @socketio.on('ping')
-    def handle_ping():
-        """Handle ping for connection keepalive"""
-        emit('pong')
-
-    @socketio.on('force_disconnect')
-    def handle_force_disconnect():
-        """Force disconnect user (admin function)"""
-        try:
-            user_id = active_users.get(request.sid)
-            if user_id:
-                # Clean up all user sessions
-                if user_id in user_sockets:
-                    for socket_id in user_sockets[user_id].copy():
-                        if socket_id in active_users:
-                            del active_users[socket_id]
-                        disconnect(socket_id)
-                    del user_sockets[user_id]
-                
-                cleanup_user_typing(user_id)
-                update_user_online_status(user_id, False)
-                
-        except Exception as e:
-            print(f'Error force disconnecting: {e}')
-
-    # Helper functions for typing management
     def start_typing(chat_id, user_id):
-        """Start typing indicator for user in chat"""
+        """Start typing indicator"""
         try:
             if chat_id not in typing_users:
                 typing_users[chat_id] = {}
             if chat_id not in typing_timers:
                 typing_timers[chat_id] = {}
             
-            # Cancel existing timer if any
-            if user_id in typing_timers[chat_id]:
+            if user_id in typing_timers.get(chat_id, {}):
                 typing_timers[chat_id][user_id].cancel()
             
-            # Mark user as typing
             typing_users[chat_id][user_id] = time.time()
             
-            # Set auto-stop timer (3 seconds)
             timer = Timer(3.0, lambda: stop_typing(chat_id, user_id))
             typing_timers[chat_id][user_id] = timer
             timer.start()
             
-            # Emit typing status to room (except sender)
-            emit('user_typing', {
+            typing_event = {
                 'user_id': user_id,
                 'is_typing': True,
                 'chat_id': chat_id
-            }, room=chat_id, include_self=False)
+            }
             
-            # For direct messages, also emit to the other user's personal room
+            # Emit to room
+            socketio.emit('user_typing', typing_event, room=chat_id, include_self=False)
+            
+            # For direct chats, also emit to user rooms
             if not chat_id.startswith('group_'):
-                user_ids = chat_id.split('_')
                 try:
-                    other_user_id = int([uid for uid in user_ids if int(uid) != user_id][0])
-                    emit('user_typing', {
-                        'user_id': user_id,
-                        'is_typing': True,
-                        'chat_id': chat_id
-                    }, room=f"user_{other_user_id}")
+                    user_ids = [int(x) for x in chat_id.split('_') if x.isdigit()]
+                    for uid in user_ids:
+                        if uid != user_id:
+                            socketio.emit('user_typing', typing_event, room=f"user_{uid}")
                 except (ValueError, IndexError):
                     pass
             
         except Exception as e:
-            print(f'Error starting typing: {e}')
+            print(f'❌ Error starting typing: {e}')
 
     def stop_typing(chat_id, user_id):
-        """Stop typing indicator for user in chat"""
-        try:
-            # Remove from typing users
-            if chat_id in typing_users and user_id in typing_users[chat_id]:
-                del typing_users[chat_id][user_id]
-                if not typing_users[chat_id]:  # Remove empty dict
-                    del typing_users[chat_id]
-            
-            # Cancel and remove timer
-            if chat_id in typing_timers and user_id in typing_timers[chat_id]:
-                typing_timers[chat_id][user_id].cancel()
-                del typing_timers[chat_id][user_id]
-                if not typing_timers[chat_id]:  # Remove empty dict
-                    del typing_timers[chat_id]
-            
-            # Emit stop typing status to room (except sender)
-            emit('user_typing', {
-                'user_id': user_id,
-                'is_typing': False,
-                'chat_id': chat_id
-            }, room=chat_id, include_self=False)
-            
-            # For direct messages, also emit to the other user's personal room
-            if not chat_id.startswith('group_'):
-                user_ids = chat_id.split('_')
-                try:
-                    other_user_id = int([uid for uid in user_ids if int(uid) != user_id][0])
-                    emit('user_typing', {
-                        'user_id': user_id,
-                        'is_typing': False,
-                        'chat_id': chat_id
-                    }, room=f"user_{other_user_id}")
-                except (ValueError, IndexError):
-                    pass
-            
-        except Exception as e:
-            print(f'Error stopping typing: {e}')
-
-    def cleanup_typing_for_room(chat_id, user_id):
-        """Clean up typing status for user in specific room"""
+        """Stop typing indicator"""
         try:
             if chat_id in typing_users and user_id in typing_users[chat_id]:
                 del typing_users[chat_id][user_id]
@@ -440,95 +442,55 @@ def socketio_init(socketio):
                 if not typing_timers[chat_id]:
                     del typing_timers[chat_id]
             
-            # Emit stop typing
-            emit('user_typing', {
+            typing_event = {
                 'user_id': user_id,
                 'is_typing': False,
                 'chat_id': chat_id
-            }, room=chat_id, include_self=False)
+            }
+            
+            socketio.emit('user_typing', typing_event, room=chat_id, include_self=False)
+            
+            if not chat_id.startsWith('group_'):
+                try:
+                    user_ids = [int(x) for x in chat_id.split('_') if x.isdigit()]
+                    for uid in user_ids:
+                        if uid != user_id:
+                            socketio.emit('user_typing', typing_event, room=f"user_{uid}")
+                except (ValueError, IndexError):
+                    pass
             
         except Exception as e:
-            print(f'Error cleaning up typing for room: {e}')
+            print(f'❌ Error stopping typing: {e}')
+
+    def cleanup_typing_for_room(chat_id, user_id):
+        """Clean up typing for room"""
+        try:
+            if user_id and chat_id in typing_users and user_id in typing_users[chat_id]:
+                del typing_users[chat_id][user_id]
+                if not typing_users[chat_id]:
+                    del typing_users[chat_id]
+            
+            if user_id and chat_id in typing_timers and user_id in typing_timers[chat_id]:
+                typing_timers[chat_id][user_id].cancel()
+                del typing_timers[chat_id][user_id]
+                if not typing_timers[chat_id]:
+                    del typing_timers[chat_id]
+            
+        except Exception as e:
+            print(f'❌ Error cleaning typing: {e}')
 
     def cleanup_user_typing(user_id):
-        """Clean up all typing timers for a user"""
+        """Clean up all typing for user"""
         try:
-            # Clean up typing status
             rooms_to_clean = []
-            for chat_id in typing_users:
+            for chat_id in list(typing_users.keys()):
                 if user_id in typing_users[chat_id]:
                     rooms_to_clean.append(chat_id)
             
             for chat_id in rooms_to_clean:
                 stop_typing(chat_id, user_id)
-            
-            # Clean up timers
-            timer_rooms_to_clean = []
-            for chat_id in typing_timers:
-                if user_id in typing_timers[chat_id]:
-                    timer_rooms_to_clean.append(chat_id)
-            
-            for chat_id in timer_rooms_to_clean:
-                if user_id in typing_timers[chat_id]:
-                    typing_timers[chat_id][user_id].cancel()
-                    del typing_timers[chat_id][user_id]
-                    if not typing_timers[chat_id]:
-                        del typing_timers[chat_id]
                         
         except Exception as e:
-            print(f'Error cleaning up user typing: {e}')
-
-    def get_room_typing_users(chat_id):
-        """Get list of users currently typing in a room"""
-        try:
-            if chat_id in typing_users:
-                current_time = time.time()
-                active_typers = []
-                
-                # Remove expired typing status (older than 5 seconds)
-                expired_users = []
-                for user_id, timestamp in typing_users[chat_id].items():
-                    if current_time - timestamp > 5:
-                        expired_users.append(user_id)
-                    else:
-                        active_typers.append(user_id)
-                
-                # Clean up expired users
-                for user_id in expired_users:
-                    stop_typing(chat_id, user_id)
-                
-                return active_typers
-            return []
-        except Exception as e:
-            print(f'Error getting room typing users: {e}')
-            return []
-
-    def broadcast_user_count():
-        """Broadcast current online user count"""
-        try:
-            online_count = len(user_sockets)
-            emit('user_count_update', {'count': online_count}, broadcast=True)
-        except Exception as e:
-            print(f'Error broadcasting user count: {e}')
-
-    # Periodic cleanup function (called every 30 seconds)
-    def periodic_cleanup():
-        """Clean up stale typing indicators and connections"""
-        try:
-            current_time = time.time()
-            
-            # Clean up old typing indicators
-            for chat_id in list(typing_users.keys()):
-                for user_id in list(typing_users[chat_id].keys()):
-                    if current_time - typing_users[chat_id][user_id] > 10:  # 10 seconds timeout
-                        stop_typing(chat_id, user_id)
-            
-            # Clean up disconnected sockets
-            for socket_id in list(active_users.keys()):
-                # This would require additional checks in a real implementation
-                pass
-                
-        except Exception as e:
-            print(f'Error in periodic cleanup: {e}')
+            print(f'❌ Error cleaning user typing: {e}')
 
     return socketio

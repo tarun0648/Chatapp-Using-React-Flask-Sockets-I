@@ -1,3 +1,4 @@
+// frontend/src/services/socket.js - ENHANCED VERSION
 import { io } from 'socket.io-client';
 
 let socket = null;
@@ -8,8 +9,9 @@ export const initSocket = () => {
       autoConnect: false,
       transports: ['websocket', 'polling'],
       reconnection: true,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: 10,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
       timeout: 20000,
       forceNew: false,
     });
@@ -41,6 +43,17 @@ export const initSocket = () => {
     socket.on('reconnect_failed', () => {
       console.error('Socket reconnection failed');
     });
+
+    // Add debug listeners for development
+    if (process.env.NODE_ENV === 'development') {
+      socket.onAny((event, ...args) => {
+        console.log('Socket event received:', event, args);
+      });
+
+      socket.onAnyOutgoing((event, ...args) => {
+        console.log('Socket event sent:', event, args);
+      });
+    }
   }
   
   return socket;
