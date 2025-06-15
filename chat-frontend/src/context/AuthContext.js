@@ -1,5 +1,7 @@
+// frontend/src/context/AuthContext.js - FIXED LOGOUT WITH SOCKET CLEANUP
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { api } from '../services/api';
+import { disconnectSocket, getSocket } from '../services/socket';
 
 const AuthContext = createContext();
 
@@ -80,10 +82,52 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    setUser(null);
-    setIsAuthenticated(false);
+  // ✅ FIXED: Enhanced logout with proper socket cleanup
+  const logout = async () => {
+    try {
+      console.log('🚪 Starting logout process...');
+      
+      // 1. Get current socket before cleanup
+      const socket = getSocket();
+      
+      // 2. Emit logout event to server BEFORE disconnecting
+      if (socket && socket.connected && user) {
+        console.log('📤 Emitting logout event for user:', user.id);
+        socket.emit('user_logout', { user_id: user.id });
+        
+        // Give server time to process logout
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      
+      // 3. Call API logout endpoint (if you have one)
+      if (user) {
+        try {
+          await api.logout(user.id);
+        } catch (error) {
+          console.error('API logout error:', error);
+          // Continue with logout even if API call fails
+        }
+      }
+      
+      // 4. Disconnect socket
+      console.log('🔌 Disconnecting socket...');
+      disconnectSocket();
+      
+      // 5. Clear local storage and state
+      localStorage.removeItem('token');
+      setUser(null);
+      setIsAuthenticated(false);
+      
+      console.log('✅ Logout completed successfully');
+      
+    } catch (error) {
+      console.error('❌ Logout error:', error);
+      // Force logout even if there are errors
+      disconnectSocket();
+      localStorage.removeItem('token');
+      setUser(null);
+      setIsAuthenticated(false);
+    }
   };
 
   const updateUser = (updatedData) => {

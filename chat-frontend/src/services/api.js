@@ -1,3 +1,4 @@
+// frontend/src/services/api.js - ADDED LOGOUT ENDPOINT
 const API_BASE = 'http://localhost:5000';
 
 export const api = {
@@ -32,6 +33,24 @@ export const api = {
       return data;
     } catch (error) {
       console.error('API: Signup error:', error);
+      throw error;
+    }
+  },
+
+  // ✅ NEW: Logout endpoint
+  logout: async (userId) => {
+    try {
+      const response = await fetch(`${API_BASE}/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId })
+      });
+      
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Logout failed');
+      return data;
+    } catch (error) {
+      console.error('API: Logout error:', error);
       throw error;
     }
   },

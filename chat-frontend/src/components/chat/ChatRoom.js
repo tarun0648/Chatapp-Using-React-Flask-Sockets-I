@@ -1,4 +1,4 @@
-// frontend/src/components/chat/ChatRoom.js - COMPLETE FIX
+// frontend/src/components/chat/ChatRoom.js - ENHANCED FOR REAL-TIME
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Phone, Video, MoreVertical, MessageCircle, Check, CheckCheck, Moon, Sun, Users, Info, UserPlus } from 'lucide-react';
@@ -28,6 +28,7 @@ const ChatRoom = () => {
   const processedMessageIds = useRef(new Set());
   const roomJoinedRef = useRef(false);
   const normalizedChatId = useRef(null);
+  const heartbeatInterval = useRef(null);
 
   const isGroupChat = chatId.startsWith('group_');
   const groupId = isGroupChat ? chatId.split('_')[1] : null;
@@ -83,9 +84,16 @@ const ChatRoom = () => {
         socketRef.current.off('user_online');
         socketRef.current.off('user_offline');
         socketRef.current.off('room_joined');
+        socketRef.current.off('connection_confirmed');
+        socketRef.current.off('heartbeat_ack');
         socketRef.current.off('error');
         
         roomJoinedRef.current = false;
+      }
+
+      // Clear heartbeat
+      if (heartbeatInterval.current) {
+        clearInterval(heartbeatInterval.current);
       }
     };
   }, [chatId, user]);
@@ -154,11 +162,23 @@ const ChatRoom = () => {
       socketRef.current.on('connect', () => {
         console.log('✅ Socket connected, joining room...');
         joinRoom();
+        startHeartbeat();
       });
     } else {
       console.log('✅ Socket already connected, joining room...');
       joinRoom();
+      startHeartbeat();
     }
+    
+    // ✅ ENHANCED: Connection confirmation
+    socketRef.current.on('connection_confirmed', (data) => {
+      console.log('🎯 Connection confirmed:', data);
+    });
+
+    // ✅ ENHANCED: Heartbeat acknowledgment
+    socketRef.current.on('heartbeat_ack', (data) => {
+      console.log('💓 Heartbeat acknowledged:', data.timestamp);
+    });
     
     // Handle room join confirmation
     socketRef.current.on('room_joined', (data) => {
@@ -171,7 +191,7 @@ const ChatRoom = () => {
       console.error('❌ Socket error:', error);
     });
     
-    // Handle incoming messages - FIXED FOR REAL-TIME
+    // ✅ ENHANCED: Handle incoming messages with better deduplication
     socketRef.current.on('receive_message', (data) => {
       console.log('📨 REAL-TIME MESSAGE RECEIVED:', data);
       
@@ -213,7 +233,7 @@ const ChatRoom = () => {
       );
     });
 
-    // Handle message read status - FIXED FOR BLUE TICK
+    // ✅ CRITICAL FIX: Enhanced message read status - BLUE TICK
     socketRef.current.on('messages_read', (data) => {
       console.log('🔵 BLUE TICK EVENT RECEIVED:', data);
       
@@ -230,16 +250,24 @@ const ChatRoom = () => {
           console.log('🔵 Updated group message status to read');
         }
       } else {
-        // DIRECT CHAT BLUE TICK - CRITICAL FIX
+        // ✅ DIRECT CHAT BLUE TICK - CRITICAL FIX
         console.log('🔵 Processing direct chat blue tick:', {
           dataSenderId: data.sender_id,
           currentUserId: user.id,
-          dataType: data.type
+          dataType: data.type,
+          dataReaderId: data.reader_id
         });
         
-        // Only update if current user is the sender of the messages that were read
-        if (data.sender_id === user.id && (data.type === 'blue_tick' || data.type === 'messages_read')) {
-          console.log('🔵 Current user IS the sender - updating blue tick');
+        // ✅ MULTIPLE CONDITIONS FOR BLUE TICK
+        const shouldUpdateBlueTick = (
+          data.sender_id === user.id || // Current user is sender
+          data.type === 'blue_tick' || 
+          data.type === 'direct_chat_read' ||
+          data.type === 'messages_read'
+        );
+        
+        if (shouldUpdateBlueTick) {
+          console.log('🔵 ✅ Updating blue tick for current user messages');
           
           setMessages(prev => 
             prev.map(msg => {
@@ -253,12 +281,12 @@ const ChatRoom = () => {
           
           console.log('🔵 ✅ BLUE TICK UPDATED SUCCESSFULLY');
         } else {
-          console.log('🔵 ❌ Event not for current user or wrong type');
+          console.log('🔵 ❌ Event not for current user messages');
         }
       }
     });
 
-    // Handle typing indicators - FIXED
+    // ✅ ENHANCED: Handle typing indicators with better state management
     socketRef.current.on('user_typing', (data) => {
       console.log('⌨️ Typing event received:', data);
       
@@ -294,7 +322,7 @@ const ChatRoom = () => {
       }
     });
 
-    // Handle online status changes
+    // ✅ ENHANCED: Handle online status changes with immediate updates
     socketRef.current.on('user_online', (data) => {
       console.log('🟢 User online:', data);
       if (!isGroupChat && currentChat?.user_id === data.user_id) {
@@ -310,6 +338,21 @@ const ChatRoom = () => {
         setCurrentChat(prev => prev ? { ...prev, online: false } : prev);
       }
     });
+  };
+
+  // ✅ NEW: Heartbeat function for faster online status
+  const startHeartbeat = () => {
+    // Clear existing heartbeat
+    if (heartbeatInterval.current) {
+      clearInterval(heartbeatInterval.current);
+    }
+
+    // Send heartbeat every 30 seconds
+    heartbeatInterval.current = setInterval(() => {
+      if (socketRef.current && socketRef.current.connected) {
+        socketRef.current.emit('heartbeat', { user_id: user.id, timestamp: Date.now() });
+      }
+    }, 30000);
   };
 
   const joinRoom = () => {
@@ -369,6 +412,7 @@ const ChatRoom = () => {
     }
   };
 
+  // ✅ ENHANCED: Direct message read with better event emission
   const markDirectMessagesAsRead = async (senderId) => {
     try {
       console.log(`🔵 MARK READ: Marking messages from ${senderId} as read by ${user.id}`);
@@ -380,13 +424,14 @@ const ChatRoom = () => {
         reader_id: user.id
       });
 
-      // Send socket event for blue tick
+      // ✅ ENHANCED: Send socket event for blue tick with better data
       if (socketRef.current && socketRef.current.connected) {
         const markReadData = {
           sender_id: senderId,
           receiver_id: user.id,
           reader_id: user.id,
-          chat_id: normalizedChatId.current || chatId
+          chat_id: normalizedChatId.current || chatId,
+          timestamp: Date.now()
         };
         
         socketRef.current.emit('mark_read', markReadData);
@@ -664,7 +709,7 @@ const ChatRoom = () => {
             <div className="relative">
               {getChatAvatar()}
               {!isGroupChat && onlineStatus && (
-                <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border border-white dark:border-gray-800"></div>
+                <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-green-500 rounded-full border border-white dark:border-gray-800 animate-pulse"></div>
               )}
             </div>
             <div>
@@ -674,7 +719,7 @@ const ChatRoom = () => {
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 {getTypingIndicator() || 
                  (isGroupChat ? `${currentChat?.member_count || 0} members` :
-                 (onlineStatus ? 'Online' : 'Offline'))}
+                 (onlineStatus ? '🟢 Online' : '🔴 Offline'))}
               </p>
             </div>
           </div>

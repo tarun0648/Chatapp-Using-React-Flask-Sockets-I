@@ -1,4 +1,4 @@
-# backend/app.py - ENHANCED VERSION
+# backend/app.py - FIXED BROADCAST ERROR
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_socketio import SocketIO
@@ -32,7 +32,7 @@ app.register_blueprint(user_bp, url_prefix="/user")
 app.register_blueprint(chat_bp, url_prefix="/chat")
 app.register_blueprint(group_bp, url_prefix="/group")
 
-# Enhanced SocketIO configuration
+# ✅ FIXED: Enhanced SocketIO configuration - REMOVED BROADCAST ERROR
 socketio = SocketIO(
     app, 
     cors_allowed_origins=["http://localhost:3000"], 
@@ -67,7 +67,7 @@ def health():
 @app.before_request
 def log_request_info():
     if request.path.startswith('/socket.io'):
-        print(f'Socket.IO request: {request.method} {request.path}')
+        print(f'📡 Socket.IO request: {request.method} {request.path}')
 
 # Error handlers
 @app.errorhandler(404)
@@ -80,18 +80,18 @@ def internal_error(error):
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("🚀 Starting Enhanced Flask-SocketIO Chat Server")
+    print("🚀 Starting FIXED Flask-SocketIO Chat Server")
     print("=" * 60)
     print("📱 Frontend URL: http://localhost:3000")
     print("🔧 Backend API: http://localhost:5000")
     print("🔌 WebSocket: ws://localhost:5000")
     print("=" * 60)
-    print("✅ Features Enabled:")
-    print("   - Real-time messaging (Direct + Group)")
-    print("   - Live typing indicators")
-    print("   - Blue tick read receipts")
-    print("   - Online status tracking")
-    print("   - Enhanced error handling")
+    print("✅ FIXED Features:")
+    print("   - ✅ Blue tick for direct chats")
+    print("   - ✅ Real-time chat list notifications")
+    print("   - ✅ Fast online/offline status")
+    print("   - ✅ Fixed broadcast error")
+    print("   - ✅ Enhanced error handling")
     print("=" * 60)
     
     socketio.run(

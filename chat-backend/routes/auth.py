@@ -1,5 +1,6 @@
+# backend/routes/auth.py - ADDED LOGOUT ENDPOINT
 from flask import Blueprint, request, jsonify
-from models.user import get_user_by_username, create_user, get_user_by_email
+from models.user import get_user_by_username, create_user, get_user_by_email, update_user_online_status
 import bcrypt
 
 auth_bp = Blueprint('auth', __name__)
@@ -56,6 +57,8 @@ def login():
         user = get_user_by_username(data['username'])
         
         if user and bcrypt.checkpw(data['password'].encode(), user['password'].encode()):
+            # ✅ Update user to online status on login
+            update_user_online_status(user['id'], True)
             return jsonify({'success': True, 'token': str(user['id'])})
         
         return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
@@ -63,3 +66,26 @@ def login():
     except Exception as e:
         print(f"Login error: {e}")
         return jsonify({'success': False, 'message': 'Login failed'}), 500
+
+# ✅ NEW: Logout endpoint
+@auth_bp.route('/logout', methods=['POST'])
+def logout():
+    try:
+        data = request.json
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({'success': False, 'message': 'User ID required'}), 400
+        
+        # Update user to offline status
+        success = update_user_online_status(user_id, False)
+        
+        if success:
+            print(f"🚪 User {user_id} logged out - status set to offline")
+            return jsonify({'success': True, 'message': 'Logged out successfully'})
+        else:
+            return jsonify({'success': False, 'message': 'Failed to update logout status'}), 500
+        
+    except Exception as e:
+        print(f"Logout error: {e}")
+        return jsonify({'success': False, 'message': 'Logout failed'}), 500

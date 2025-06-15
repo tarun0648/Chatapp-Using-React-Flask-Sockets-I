@@ -1,3 +1,4 @@
+// frontend/src/components/chat/ChatList.js - ENHANCED LOGOUT HANDLING
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { User, Settings, LogOut, Search, MessageCircle, Moon, Sun, Wifi, WifiOff, Users, Plus } from 'lucide-react';
@@ -13,6 +14,8 @@ const ChatList = () => {
   const [loading, setLoading] = useState(true);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [onlineUsers, setOnlineUsers] = useState(new Set());
+  const [socketConnected, setSocketConnected] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const { user, logout } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const navigate = useNavigate();
@@ -31,40 +34,68 @@ const ChatList = () => {
     if (!socket.connected) {
       socket.connect();
     }
-    
+
+    // Connection status tracking
+    socket.on('connect', () => {
+      console.log('🔌 ChatList: Socket connected');
+      setSocketConnected(true);
+    });
+
+    socket.on('disconnect', () => {
+      console.log('🔌 ChatList: Socket disconnected');
+      setSocketConnected(false);
+    });
+
+    // Enhanced online status with immediate updates
     socket.on('user_online', (data) => {
+      console.log('🟢 User came online:', data);
       setOnlineUsers(prev => new Set([...prev, data.user_id]));
-      // Update chat list to reflect online status
+      
+      // Update chat list to reflect online status immediately
       setChats(prev => prev.map(chat => 
         chat.user_id === data.user_id 
-          ? { ...chat, online: true }
+          ? { ...chat, online: true, status: 'Online' }
           : chat
       ));
     });
     
     socket.on('user_offline', (data) => {
+      console.log('🔴 User went offline:', data);
       setOnlineUsers(prev => {
         const newSet = new Set(prev);
         newSet.delete(data.user_id);
         return newSet;
       });
-      // Update chat list to reflect offline status
+      
+      // Update chat list to reflect offline status immediately
       setChats(prev => prev.map(chat => 
         chat.user_id === data.user_id 
-          ? { ...chat, online: false }
+          ? { ...chat, online: false, status: 'Offline' }
           : chat
       ));
     });
 
+    // Enhanced new message notifications for ChatList
     socket.on('new_message_notification', (data) => {
-      console.log('New message notification:', data);
+      console.log('📢 NEW MESSAGE NOTIFICATION:', data);
+      
       // Update chat list with new message preview and unread count
       setChats(prev => prev.map(chat => {
-        if (chat.id === data.chat_id) {
+        const chatMatches = (
+          (chat.type === 'direct' && chat.id === data.chat_id) ||
+          (chat.type === 'group' && chat.id === `group_${data.group_id}`) ||
+          (chat.id === data.chat_id)
+        );
+        
+        if (chatMatches && data.sender_id !== user.id) {
+          const truncatedContent = data.content.length > 50 ? 
+            data.content.substring(0, 50) + '...' : 
+            data.content;
+          
           return {
             ...chat,
             last_message: data.content,
-            last_message_preview: data.content.length > 50 ? data.content.substring(0, 50) + '...' : data.content,
+            last_message_preview: truncatedContent,
             unread_count: (chat.unread_count || 0) + 1,
             timestamp: 'now',
             last_sender: data.sender_name
@@ -72,19 +103,29 @@ const ChatList = () => {
         }
         return chat;
       }));
+      
+      // Show visual notification
+      showNotification(data);
     });
 
+    // Real-time message updates for chat list
     socket.on('receive_message', (data) => {
+      console.log('📨 ChatList: Received message update:', data);
+      
       // Update chat list with new message preview and unread count
       setChats(prev => prev.map(chat => {
         const chatMatches = (chat.type === 'direct' && chat.id === data.chat_id) ||
                            (chat.type === 'group' && chat.id === `group_${data.group_id}`);
         
         if (chatMatches && data.sender_id !== user.id) {
+          const truncatedContent = data.content.length > 50 ? 
+            data.content.substring(0, 50) + '...' : 
+            data.content;
+          
           return {
             ...chat,
             last_message: data.content,
-            last_message_preview: data.content.length > 50 ? data.content.substring(0, 50) + '...' : data.content,
+            last_message_preview: truncatedContent,
             unread_count: (chat.unread_count || 0) + 1,
             timestamp: 'now',
             last_sender: data.sender_name
@@ -95,12 +136,39 @@ const ChatList = () => {
     });
 
     return () => {
+      socket.off('connect');
+      socket.off('disconnect');
       socket.off('user_online');
       socket.off('user_offline');
       socket.off('new_message_notification');
       socket.off('receive_message');
     };
   };
+
+  // Visual notification function
+  const showNotification = (data) => {
+    // Browser notification (if permission granted)
+    if (Notification.permission === 'granted') {
+      new Notification(`New message from ${data.sender_name}`, {
+        body: data.content,
+        icon: '/favicon.ico',
+        tag: data.chat_id
+      });
+    }
+    
+    // Visual flash effect
+    document.title = `💬 New Message - ChatApp`;
+    setTimeout(() => {
+      document.title = 'ChatApp';
+    }, 3000);
+  };
+
+  // Request notification permission on mount
+  useEffect(() => {
+    if (Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
 
   const loadChats = async () => {
     if (!user) return;
@@ -137,6 +205,20 @@ const ChatList = () => {
       c.id === chat.id ? { ...c, unread_count: 0 } : c
     ));
     navigate(`/chat/${chat.id}`);
+  };
+
+  // ✅ ENHANCED: Logout with visual feedback
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    
+    setLoggingOut(true);
+    try {
+      await logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+    } finally {
+      setLoggingOut(false);
+    }
   };
 
   const getStatusColor = (chat) => {
@@ -317,7 +399,14 @@ const ChatList = () => {
             {getUserAvatar()}
             <div>
               <h1 className="text-xl font-semibold text-gray-800 dark:text-gray-100">Chats</h1>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Welcome back, {currentUser?.name || user?.name}</p>
+              <p className="text-sm text-gray-600 dark:text-gray-400 flex items-center space-x-2">
+                <span>Welcome back, {currentUser?.name || user?.name}</span>
+                {socketConnected ? (
+                  <span className="text-green-500 text-xs"></span>
+                ) : (
+                  <span className="text-red-500 text-xs"></span>
+                )}
+              </p>
             </div>
           </div>
           <div className="flex items-center space-x-2">
@@ -325,26 +414,35 @@ const ChatList = () => {
               onClick={() => setShowGroupModal(true)}
               className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
               title="Create Group"
+              disabled={loggingOut}
             >
               <Plus size={20} />
             </button>
             <button 
               onClick={toggleTheme}
               className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
+              disabled={loggingOut}
             >
               {isDark ? <Sun size={20} /> : <Moon size={20} />}
             </button>
             <button 
               onClick={() => navigate('/profile')}
               className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
+              disabled={loggingOut}
             >
               <Settings size={20} />
             </button>
             <button 
-              onClick={logout}
-              className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition"
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition disabled:opacity-50"
+              title={loggingOut ? "Logging out..." : "Logout"}
             >
-              <LogOut size={20} />
+              {loggingOut ? (
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-600"></div>
+              ) : (
+                <LogOut size={20} />
+              )}
             </button>
           </div>
         </div>
@@ -360,6 +458,7 @@ const ChatList = () => {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+            disabled={loggingOut}
           />
         </div>
       </div>
@@ -377,19 +476,23 @@ const ChatList = () => {
             {filteredChats.map((chat) => (
               <div
                 key={chat.id}
-                onClick={() => openChat(chat)}
-                className="px-6 py-4 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition"
+                onClick={() => !loggingOut && openChat(chat)}
+                className={`px-6 py-4 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer transition ${
+                  chat.unread_count > 0 ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+                } ${loggingOut ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <div className="flex items-center space-x-3">
                   <div className="relative">
                     {getAvatar(chat)}
                     {chat.type === 'direct' && (
-                      <div className={`absolute -bottom-1 -right-1 w-4 h-4 ${getStatusColor(chat)} rounded-full border-2 border-white dark:border-gray-800`}></div>
+                      <div className={`absolute -bottom-1 -right-1 w-4 h-4 ${getStatusColor(chat)} rounded-full border-2 border-white dark:border-gray-800 ${
+                        onlineUsers.has(chat.user_id) || chat.online ? 'animate-pulse' : ''
+                      }`}></div>
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
+                      <h3 className={`text-sm font-semibold ${chat.unread_count > 0 ? 'text-blue-600 dark:text-blue-400' : 'text-gray-900 dark:text-gray-100'} truncate`}>
                         {chat.user}
                         {chat.type === 'group' && chat.role === 'admin' && (
                           <span className="ml-2 text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-1 rounded">
@@ -399,7 +502,7 @@ const ChatList = () => {
                       </h3>
                       <div className="flex items-center space-x-2">
                         {chat.unread_count > 0 && (
-                          <span className="bg-blue-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center">
+                          <span className="bg-blue-500 text-white text-xs rounded-full px-2 py-1 min-w-[20px] text-center animate-pulse">
                             {chat.unread_count}
                           </span>
                         )}
@@ -409,7 +512,7 @@ const ChatList = () => {
                       </div>
                     </div>
                     <div className="flex items-center justify-between">
-                      <p className="text-sm text-gray-600 dark:text-gray-400 truncate">
+                      <p className={`text-sm ${chat.unread_count > 0 ? 'text-gray-800 dark:text-gray-200 font-medium' : 'text-gray-600 dark:text-gray-400'} truncate`}>
                         {chat.last_message_preview || 
                          (chat.type === 'group' ? chat.description || 'Group chat' : `@${chat.username}`)}
                       </p>
@@ -435,6 +538,16 @@ const ChatList = () => {
           </div>
         )}
       </div>
+
+      {/* Logout overlay */}
+      {loggingOut && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 flex items-center space-x-4">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <p className="text-gray-900 dark:text-gray-100">Logging out...</p>
+          </div>
+        </div>
+      )}
 
       <CreateGroupModal />
     </div>
