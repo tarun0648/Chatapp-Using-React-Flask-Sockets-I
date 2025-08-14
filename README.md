@@ -111,6 +111,3 @@ This is a full-stack chat application built with a React frontend, a Flask backe
 
 4.  **Open your browser** and navigate to `http://localhost:3000` to use the application.
 
----
-
-## Project Structure
