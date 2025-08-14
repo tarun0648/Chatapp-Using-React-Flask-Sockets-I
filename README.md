@@ -66,12 +66,54 @@ This is a full-stack chat application built with a React frontend, a Flask backe
     ```
 
 4.  **Set up the database:**
-    * Make sure your MySQL server is running.
-    * Create a new database named `chat_app`.
-    * Import the database schema:
-        ```bash
-        mysql -u <your_mysql_user> -p chat_app < database_schema.sql
-        ```
+
+    This section provides a detailed guide on setting up your MySQL database.
+
+    #### Step 1: Open the MySQL Command-Line Client
+
+    First, open a terminal or command prompt and connect to your MySQL server.
+
+    ```bash
+    mysql -u your_username -p
+    ```
+
+    Replace `your_username` with your MySQL username. You will be prompted for your password.
+
+    #### Step 2: Create a New Database
+
+    In the MySQL shell, create the `chat_app` database.
+
+    ```sql
+    CREATE DATABASE chat_app;
+    ```
+
+    You should see a `Query OK` message.
+
+    #### Step 3: Select the Database
+
+    Use the `USE` command to select the newly created database.
+
+    ```sql
+    USE chat_app;
+    ```
+
+    You will see a `Database changed` message.
+
+    #### Step 4: Import the Database Schema
+
+    Now, import the `database_schema.sql` file. You can do this from within the MySQL shell:
+
+    ```sql
+    source /path/to/your/database_schema.sql;
+    ```
+
+    **Important:** Replace `/path/to/your/database_schema.sql` with the absolute path to the `database_schema.sql` file on your system.
+
+    Alternatively, you can run the import command directly from your system's terminal (without logging into the MySQL shell):
+
+    ```bash
+    mysql -u your_username -p chat_app < /path/to/your/database_schema.sql
+    ```
 
 5.  **Configure environment variables:**
     * Create a `.env` file in the `chat-backend` directory.
@@ -110,4 +152,3 @@ This is a full-stack chat application built with a React frontend, a Flask backe
     The frontend will be running at `http://localhost:3000`.
 
 4.  **Open your browser** and navigate to `http://localhost:3000` to use the application.
-
