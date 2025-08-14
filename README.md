@@ -128,8 +128,17 @@ This is a full-stack chat application built with a React frontend, a Flask backe
         ```
 
 6.  **Run the backend server:**
+
+    You can run the backend server using either of the following commands:
+
+    **Option 1 (using Flask's built-in command):**
     ```bash
     flask run
+    ```
+
+    **Option 2 (by directly running the Python script):**
+    ```bash
+    python app.py
     ```
     The backend will be running at `http://localhost:5000`.
 
